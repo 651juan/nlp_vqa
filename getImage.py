@@ -27,10 +27,13 @@ with gzip.GzipFile('data/vqa_questions_test.gzip', 'r') as file:
     questions = json.loads(file.read())
 
 
-print(annotations['annotations'][0])
-print(questions['questions'][0])
-img_id = questions['questions'][0]['image_id']
-h5_id = visual_feat_mapping[str(img_id)]
-img_feat = img_features[h5_id]
-print(img_feat)
-print(imgid2info[str(img_id)])
+for i in range(len(questions['questions'])):
+    print(questions['questions'][i]['question'])
+    for answer in annotations['annotations'][i]['answers'] :
+        print("answer", answer['answer'], "confidence", answer['answer_confidence'])
+    img_id = questions['questions'][i]['image_id']
+    h5_id = visual_feat_mapping[str(img_id)]
+    img_feat = img_features[h5_id]
+    print(img_feat)
+    print(imgid2info[str(img_id)])
+    print("**************************")
