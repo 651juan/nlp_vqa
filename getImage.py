@@ -24,15 +24,15 @@ UNK = w2i["<unk>"]
 CUDA = torch.cuda.is_available()
 
 def read_dataset(annotations_path, questions_path):
-    # with open(current_path + '/data/imgid2imginfo.json', 'r') as file:
-    #     imgid2info = json.load(file)
-    #
-    # # load image features from hdf5 file and convert it to numpy array
-    # img_features = np.asarray(h5py.File(path_to_h5_file, 'r')['img_features'])
-    #
-    # # load mapping file
-    # with open(path_to_json_file, 'r') as f:
-    #     visual_feat_mapping = json.load(f)['VQA_imgid2id']
+    with open(current_path + '/data/imgid2imginfo.json', 'r') as file:
+        imgid2info = json.load(file)
+
+    # load image features from hdf5 file and convert it to numpy array
+    img_features = np.asarray(h5py.File(path_to_h5_file, 'r')['img_features'])
+
+    # load mapping file
+    with open(path_to_json_file, 'r') as f:
+        visual_feat_mapping = json.load(f)['VQA_imgid2id']
 
     with gzip.GzipFile(annotations_path, 'r') as file:
         annotations = json.loads(file.read())
@@ -43,7 +43,10 @@ def read_dataset(annotations_path, questions_path):
     for line in range(len(questions['questions'])):
         most_common_answer = annotations['annotations'][line]['multiple_choice_answer']
         words = questions['questions'][line]['question'].lower().strip()
-        yield ([w2i[x] for x in words.split(" ")], t2i[most_common_answer])
+        img_id = questions['questions'][line]['image_id']
+        h5_id = visual_feat_mapping[str(img_id)]
+        img_feat = img_features[h5_id]
+        yield ([w2i[x] for x in words.split(" ")], t2i[most_common_answer], img_feat)
 
 # Read in the data
 train = list(read_dataset("data/vqa_annotatons_train.gzip", "data/vqa_questions_train.gzip"))
@@ -54,19 +57,20 @@ nanswers = len(t2i)
 
 
 class CBOW(nn.Module):
-    def __init__(self, vocab_size, embedding_dim, output_dim):
+    def __init__(self, vocab_size, embedding_dim, feature_dim, output_dim):
         super(CBOW, self).__init__()
         self.embeddings = nn.Embedding(vocab_size, embedding_dim)
-        self.linear = nn.Linear(embedding_dim, output_dim)
+        self.linear = nn.Linear(feature_dim+embedding_dim, output_dim)
 
-    def forward(self, inputs):
-        embeds = self.embeddings(inputs)
+    def forward(self, words, image):
+        embeds = self.embeddings(words)
         bow = torch.sum(embeds, 1)
+        bow = torch.cat([image, bow], dim=1)
         logits = self.linear(bow)
         return logits
 
 
-model = CBOW(nwords, 64, nanswers)
+model = CBOW(nwords, 64, 2048, nanswers)
 print(model)
 
 
@@ -74,9 +78,11 @@ def evaluate(model, data):
     """Evaluate a model on a data set."""
     correct = 0.0
 
-    for words, tag in data:
+    for words, tag, img_feat in data:
+        image = img_feat.tolist()
+        image_features = Variable(torch.FloatTensor([image]))
         lookup_tensor = Variable(torch.LongTensor([words]))
-        scores = model(lookup_tensor)
+        scores = model(lookup_tensor, image_features)
         predict = scores.data.numpy().argmax(axis=1)[0]
 
         if predict == tag:
@@ -96,11 +102,12 @@ for ITER in range(100):
     train_loss = 0.0
     start = time.time()
 
-    for words, tag in train:
-
+    for words, tag, img_feat in train:
+        image = img_feat.tolist()
         # forward pass
         lookup_tensor = Variable(torch.LongTensor([words]))
-        scores = model(lookup_tensor)
+        image_features = Variable(torch.FloatTensor([image]))
+        scores = model(lookup_tensor, image_features)
         loss = nn.CrossEntropyLoss()
         target = Variable(torch.LongTensor([tag]))
         output = loss(scores, target)
