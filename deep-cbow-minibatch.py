@@ -232,4 +232,4 @@ for ITER in range(parameters.epochs):
     # evaluate
     _, _, acc_train = evaluate(model, train)
     _, _, acc_dev = evaluate(model, dev)
-    print("iter %r: dev acc=%.4f  test acc=%.4f" % (ITER, acc_train, acc_dev))
+    print("iter %r: train acc=%.4f  dev acc=%.4f" % (ITER, acc_train, acc_dev))
