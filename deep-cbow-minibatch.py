@@ -11,6 +11,8 @@ Based on Graham Neubig's DyNet code examples:
 
 import gzip
 import json
+import numpy as np
+import h5py
 import parameters
 import random
 import time
@@ -22,6 +24,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.autograd import Variable
+import sys
 
 torch.manual_seed(1)
 random.seed(1)
@@ -38,9 +41,20 @@ UNK = w2i["<unk>"]
 PAD = w2i["<pad>"]
 
 # One data point
-Example = namedtuple("Example", ["words", "tag", "w"])
+Example = namedtuple("Example", ["words", "tag", "img_feat"])
 
-def read_dataset(questions_path, annotations_path):
+def read_dataset(questions_path, annotations_path, image_features_path, img_features2id_path, imgid2imginfo_path):
+
+    with open(imgid2imginfo_path, 'r') as file:
+        imgid2info = json.load(file)
+
+    # load image features from hdf5 file and convert it to numpy array
+    img_features = np.asarray(h5py.File(image_features_path, 'r')['img_features'])
+
+    # load mapping file
+    with open(img_features2id_path, 'r') as f:
+        visual_feat_mapping = json.load(f)['VQA_imgid2id']
+
     with gzip.GzipFile(questions_path, 'r') as file:
         questions = json.loads(file.read())
 
@@ -50,15 +64,27 @@ def read_dataset(questions_path, annotations_path):
     for line in range(len(questions['questions'])):
         words = questions['questions'][line]['question'].lower().strip()
         tag = annotations['annotations'][line]['multiple_choice_answer']
+        img_id = questions['questions'][line]['image_id']
+        h5_id = visual_feat_mapping[str(img_id)]
+        img_feat = img_features[h5_id]
         yield Example(words=[w2i[x] for x in words.split(" ")],
                       tag=t2i[tag],
-                      w=tag)
+                      img_feat=img_feat)
 
 
 # Read in the data
-train = list(read_dataset( "data/vqa_questions_train.gzip", "data/vqa_annotatons_train.gzip"))
+train = list(read_dataset( "data/vqa_questions_train.gzip",
+                           "data/vqa_annotatons_train.gzip",
+                            parameters.image_features_path,
+                            parameters.img_features2id_path,
+                            parameters.imgid2imginfo_path))
+
 w2i = defaultdict(lambda: UNK, w2i)
-dev = list(read_dataset("data/vqa_questions_valid.gzip", "data/vqa_annotatons_valid.gzip"))
+dev = list(read_dataset("data/vqa_questions_valid.gzip",
+                        "data/vqa_annotatons_valid.gzip",
+                        parameters.image_features_path,
+                        parameters.img_features2id_path,
+                        parameters.imgid2imginfo_path))
 nwords = len(w2i)
 ntags = len(t2i)
 
@@ -67,7 +93,7 @@ class DeepCBOW(nn.Module):
     Deep CBOW model
     """
 
-    def __init__(self, vocab_size, embedding_dim, output_dim, hidden_dims=[], transformations=[]):
+    def __init__(self, vocab_size, embedding_dim, img_features_dim, output_dim, hidden_dims=[], transformations=[]):
         """
         :param vocab_size: Vocabulary size of the training set.
         :param embedding_dim: The word embedding dimension.
@@ -80,10 +106,10 @@ class DeepCBOW(nn.Module):
         self.hidden_num = len(hidden_dims)
         self.linears = {}
         if (self.hidden_num == 0):
-            self.linear1 = nn.Linear(embedding_dim, output_dim)
+            self.linear1 = nn.Linear(img_features_dim + embedding_dim, output_dim)
             self.linears[0] = self.linear1
         else:
-            self.linear1 = nn.Linear(embedding_dim, hidden_dims[0])
+            self.linear1 = nn.Linear(img_features_dim + embedding_dim, hidden_dims[0])
             self.linears[0] = self.linear1
             for i in range(1, self.hidden_num):
                 l = "self.linear" + str(i+1)
@@ -94,9 +120,10 @@ class DeepCBOW(nn.Module):
             exec("self.linears[self.hidden_num] = " + l)
         self.F = transformations
 
-    def forward(self, inputs):
-        embeds = self.embeddings(inputs)
+    def forward(self, words, image):
+        embeds = self.embeddings(words)
         h = torch.sum(embeds, 1)
+        h = torch.cat([image, h], dim=1)
         if(self.hidden_num == 0):
             h = self.linears[0](h)
         else:
@@ -116,6 +143,7 @@ class DeepCBOW(nn.Module):
 
 model = DeepCBOW(nwords,
                  parameters.embedding_dim,
+                 parameters.img_features_dim,
                  ntags,
                  parameters.hidden_dims,
                  parameters.transformations)
@@ -136,8 +164,8 @@ def evaluate(model, data):
 
     for batch in minibatch(data):
 
-        seqs, tags = preprocess(batch)
-        scores = model(get_variable(seqs))
+        seqs, tags, image = preprocess(batch)
+        scores = model(get_variable(seqs), get_image(image))
         _, predictions = torch.max(scores.data, 1)
         targets = get_variable(tags)
 
@@ -150,6 +178,9 @@ def get_variable(x):
     """Get a Variable given indices x"""
     tensor = torch.cuda.LongTensor(x) if CUDA else torch.LongTensor(x)
     return Variable(tensor)
+def get_image(x):
+    tensor = torch.cuda.FloatTensor(x) if CUDA else torch.FloatTensor(x)
+    return Variable(tensor)
 
 
 def preprocess(batch):
@@ -161,8 +192,8 @@ def preprocess(batch):
     seqs = [example.words for example in batch]
     max_length = max(map(len, seqs))
     seqs = [seq + [PAD] * (max_length - len(seq)) for seq in seqs]
-
-    return seqs, tags
+    img = [example.img_feat.tolist() for example in batch]
+    return seqs, tags, img
 
 
 optimizer = optim.Adam(model.parameters(), parameters.lr)
@@ -179,10 +210,10 @@ for ITER in range(parameters.epochs):
         updates += 1
 
         # pad data with zeros
-        seqs, tags = preprocess(batch)
+        seqs, tags, image = preprocess(batch)
 
         # forward pass
-        scores = model(get_variable(seqs))
+        scores = model(get_variable(seqs), get_image(image))
         targets = get_variable(tags)
         loss = nn.CrossEntropyLoss()
         output = loss(scores, targets)
@@ -201,4 +232,4 @@ for ITER in range(parameters.epochs):
     # evaluate
     _, _, acc_train = evaluate(model, train)
     _, _, acc_dev = evaluate(model, dev)
-    print("iter %r: train acc=%.4f  test acc=%.4f" % (ITER, acc_train, acc_dev))
+    print("iter %r: dev acc=%.4f  test acc=%.4f" % (ITER, acc_train, acc_dev))
