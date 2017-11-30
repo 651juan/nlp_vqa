@@ -41,7 +41,7 @@ UNK = w2i["<unk>"]
 PAD = w2i["<pad>"]
 
 # One data point
-Example = namedtuple("Example", ["words", "tag", "img_feat"])
+Example = namedtuple("Example", ["words", "tag", "type", "img_feat"])
 
 def read_dataset(questions_path, annotations_path, image_features_path, img_features2id_path, imgid2imginfo_path):
 
@@ -64,11 +64,14 @@ def read_dataset(questions_path, annotations_path, image_features_path, img_feat
     for line in range(len(questions['questions'])):
         words = questions['questions'][line]['question'].lower().strip()
         tag = annotations['annotations'][line]['multiple_choice_answer']
+        type = annotations['annotations'][line]['answer_type']
+
         img_id = questions['questions'][line]['image_id']
         h5_id = visual_feat_mapping[str(img_id)]
         img_feat = img_features[h5_id]
         yield Example(words=[w2i[x] for x in words.split(" ")],
                       tag=t2i[tag],
+                      type=type,
                       img_feat=img_feat)
 
 
@@ -85,6 +88,13 @@ dev = list(read_dataset("data/vqa_questions_valid.gzip",
                         parameters.image_features_path,
                         parameters.img_features2id_path,
                         parameters.imgid2imginfo_path))
+
+test = list(read_dataset("data/vqa_questions_test.gzip",
+                        "data/vqa_annotatons_test.gzip",
+                        parameters.image_features_path,
+                        parameters.img_features2id_path,
+                        parameters.imgid2imginfo_path))
+
 nwords = len(w2i)
 ntags = len(t2i)
 
@@ -160,18 +170,41 @@ def minibatch(data, batch_size=32):
 
 def evaluate(model, data):
     """Evaluate a model on a data set."""
-    correct = 0.0
+
+    correct_all = 0.0
+    correct_yesno = 0.0
+    correct_number = 0.0
+    correct_other = 0.0
+
+    size_yesno = 0
+    size_number = 0
+    size_other = 0
 
     for batch in minibatch(data):
 
-        seqs, tags, image = preprocess(batch)
+        seqs, tags, types, image = preprocess(batch)
         scores = model(get_variable(seqs), get_image(image))
         _, predictions = torch.max(scores.data, 1)
         targets = get_variable(tags)
 
-        correct += torch.eq(predictions, targets).sum().data[0]
+        correct = torch.eq(predictions, targets)
+        for i in range(len(correct)):
+            if types[i] == 'yes/no':
+                size_yesno+=1
+                if correct.data[i] == 1:
+                    correct_yesno += 1
+            elif types[i] == 'number':
+                size_number+=1
+                if correct.data[i] == 1:
+                    correct_number += 1
+            elif types[i] == 'other':
+                size_other+=1
+                if correct.data[i]:
+                    correct_other+=1
 
-    return correct, len(data), correct/len(data)
+        correct_all += torch.eq(predictions, targets).sum().data[0]
+
+    return correct_all, len(data), correct_all/len(data), correct_yesno/size_yesno, correct_number/size_number, correct_other/size_other
 
 
 def get_variable(x):
@@ -187,13 +220,14 @@ def preprocess(batch):
     """ Add zero-padding to a batch. """
 
     tags = [example.tag for example in batch]
+    types = [example.type for example in batch]
 
     # add zero-padding to make all sequences equally long
     seqs = [example.words for example in batch]
     max_length = max(map(len, seqs))
     seqs = [seq + [PAD] * (max_length - len(seq)) for seq in seqs]
     img = [example.img_feat.tolist() for example in batch]
-    return seqs, tags, img
+    return seqs, tags, types, img
 
 
 optimizer = optim.Adam(model.parameters(), parameters.lr)
@@ -210,7 +244,7 @@ for ITER in range(parameters.epochs):
         updates += 1
 
         # pad data with zeros
-        seqs, tags, image = preprocess(batch)
+        seqs, tags, types, image = preprocess(batch)
 
         # forward pass
         scores = model(get_variable(seqs), get_image(image))
@@ -230,6 +264,10 @@ for ITER in range(parameters.epochs):
           (ITER, train_loss/updates, time.time()-start))
 
     # evaluate
-    _, _, acc_train = evaluate(model, train)
-    _, _, acc_dev = evaluate(model, dev)
-    print("iter %r: train acc=%.4f  dev acc=%.4f" % (ITER, acc_train, acc_dev))
+    _, _, train_all, train_yesno, train_number, train_other = evaluate(model, train)
+    _, _, dev_all, dev_yesno, dev_number, dev_other = evaluate(model, dev)
+    print("iter %r: train all=%.4f yesno=%.4f number=%.4f other=%.4f" % (ITER, train_all, train_yesno, train_number, train_other))
+    print("iter %r: valid all=%.4f yesno=%.4f number=%.4f other=%.4f" % (ITER, dev_all, dev_yesno, dev_number, dev_other))
+
+_, _, test_all, test_yesno, test_number, test_other = evaluate(model, test)
+print("test all=%.4f yesno=%.4f number=%.4f other=%.4f" % (test_all, test_yesno, test_number, test_other))
