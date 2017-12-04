@@ -103,7 +103,7 @@ class DeepCBOW(nn.Module):
     Deep CBOW model
     """
 
-    def __init__(self, vocab_size, embedding_dim, img_features_dim, output_dim, hidden_dims=[], transformations=[]):
+    def __init__(self, vocab_size, embedding_dim, img_features_dim, output_dim, hidden_dims=[], activation_functions=[]):
         """
         :param vocab_size: Vocabulary size of the training set.
         :param embedding_dim: The word embedding dimension.
@@ -117,31 +117,28 @@ class DeepCBOW(nn.Module):
         self.linears = {}
         if (self.hidden_num == 0):
             self.linear1 = nn.Linear(img_features_dim + embedding_dim, output_dim)
-            self.linears[0] = self.linear1
         else:
             self.linear1 = nn.Linear(img_features_dim + embedding_dim, hidden_dims[0])
-            self.linears[0] = self.linear1
             for i in range(1, self.hidden_num):
-                l = "self.linear" + str(i+1)
-                exec(l + " = nn.Linear(hidden_dims[i-1], hidden_dims[i])")
-                exec("self.linears[i] = " + l)
-            l = "self.linear" + str(self.hidden_num + 1)
-            exec(l + " = nn.Linear(hidden_dims[self.hidden_num-1], output_dim)")
-            exec("self.linears[self.hidden_num] = " + l)
-        self.F = transformations
+                name = "linear" + str(i + 1)
+                self.add_module(name, nn.Linear(hidden_dims[i-1], hidden_dims[i]))
+            name = "linear" + str(self.hidden_num + 1)
+            self.add_module(name, nn.Linear(hidden_dims[self.hidden_num - 1], output_dim))
+        self.named_modules = dict(self.named_children())
+        self.F = activation_functions
 
     def forward(self, words, image):
         embeds = self.embeddings(words)
         h = torch.sum(embeds, 1)
         h = torch.cat([image, h], dim=1)
         if(self.hidden_num == 0):
-            h = self.linears[0](h)
+            h = self.linear1(h)
         else:
             for i in range(self.hidden_num):
                 name = self.F[i]
-                matrix = self.linears[i](h)
+                matrix = self.named_modules["linear"+str(i+1)](h)
                 h = self.func_map(name, matrix)
-            h = self.linears[self.hidden_num](h)
+            h = self.named_modules["linear"+str(self.hidden_num+1)](h)
         return h
 
     def func_map(self, name, matrix):
