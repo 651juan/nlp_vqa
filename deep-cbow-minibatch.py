@@ -266,5 +266,19 @@ for ITER in range(parameters.epochs):
     print("iter %r: train all=%.4f yesno=%.4f number=%.4f other=%.4f" % (ITER, train_all, train_yesno, train_number, train_other))
     print("iter %r: valid all=%.4f yesno=%.4f number=%.4f other=%.4f" % (ITER, dev_all, dev_yesno, dev_number, dev_other))
 
+    #check if the dev accuracy is getting decreased, or stable
+    #or to check the dev loss if gets increased
+    if ITER == 0:
+        #init
+        prev_imrpovement = dev_all
+    elif prev_imrpovement >=  dev_all :
+        print("NO IMRPOVEMENT for ")
+        prev_imrpovement = dev_all
+        terminator += 1
+        if terminator == parameters.threshold_val:
+            print("Epochs Halt , didnt manage to reheal")
+    else :
+        prev_imrpovement = dev_all
+        terminator = 0
 _, _, test_all, test_yesno, test_number, test_other = evaluate(model, test)
 print("test all=%.4f yesno=%.4f number=%.4f other=%.4f" % (test_all, test_yesno, test_number, test_other))

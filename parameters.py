@@ -20,3 +20,5 @@ img_features_dim = 2048
 hidden_dims = [100]
 transformations = ["relu"]
 
+#max number of iterations in order to get the dev accuracy imrpoved again , or the loss dev (?) decreased again.
+threshold_val = 5
