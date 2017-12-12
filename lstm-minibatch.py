@@ -98,7 +98,7 @@ test = list(read_dataset("data/vqa_questions_test.gzip",
 nwords = len(w2i)
 ntags = len(t2i)
 
-class DeepCBOW(nn.Module):
+class DeepLSTM(nn.Module):
     """
     Deep CBOW model
     """
@@ -111,9 +111,9 @@ class DeepCBOW(nn.Module):
         :param hidden_dims: A list of hidden layer sizes. Default: []
         :param transformations: A list of transformation functions.
         """
-        super(DeepCBOW, self).__init__()
+        super(DeepLSTM, self).__init__()
         self.embeddings = nn.Embedding(vocab_size, embedding_dim, padding_idx=0)
-        self.lstm = nn.LSTM(input_size=embedding_dim, hidden_size=parameters.lstm_dim, num_layers=1)
+        self.lstm = nn.LSTM(input_size=embedding_dim, hidden_size=parameters.lstm_dim, num_layers=1, batch_first=True)
         self.hidden_num = len(hidden_dims)
         self.linears = {}
         if (self.hidden_num == 0):
@@ -130,11 +130,8 @@ class DeepCBOW(nn.Module):
 
     def forward(self, words, image):
         embeds = self.embeddings(words)
-        #h = torch.sum(embeds, 1)
-        #print(embeds)
-        h, _ = self.lstm(embeds)
-        h = torch.sum(h, 1)
-        #print(h)
+        _, (_,c) = self.lstm(embeds)
+        h = c.squeeze(0)
         h = torch.cat([image, h], dim=1)
         if(self.hidden_num == 0):
             h = self.linear1(h)
@@ -144,6 +141,7 @@ class DeepCBOW(nn.Module):
                 matrix = self.named_modules["linear"+str(i+1)](h)
                 h = self.func_map(name, matrix)
             h = self.named_modules["linear"+str(self.hidden_num+1)](h)
+        h = F.log_softmax(h, dim=1)
         return h
 
     def func_map(self, name, matrix):
@@ -153,7 +151,7 @@ class DeepCBOW(nn.Module):
             # Default
             return F.relu(matrix)
 
-model = DeepCBOW(nwords,
+model = DeepLSTM(nwords,
                  parameters.embedding_dim,
                  parameters.img_features_dim,
                  ntags,
@@ -182,13 +180,12 @@ def evaluate(model, data):
     size_number = 0
     size_other = 0
 
-    for batch in minibatch(data):
+    for batch in minibatch(data, parameters.batch_size):
 
         seqs, tags, types, image = preprocess(batch)
         scores = model(get_variable(seqs), get_image(image))
         _, predictions = torch.max(scores.data, 1)
         targets = get_variable(tags)
-
         correct = torch.eq(predictions, targets)
         for i in range(len(correct)):
             if types[i] == 'yes/no':
@@ -251,7 +248,8 @@ for ITER in range(parameters.epochs):
         # forward pass
         scores = model(get_variable(seqs), get_image(image))
         targets = get_variable(tags)
-        loss = nn.CrossEntropyLoss()
+        loss = nn.NLLLoss()
+        # loss = nn.CrossEntropyLoss()
         output = loss(scores, targets)
         train_loss += output.data[0]
 
