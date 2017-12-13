@@ -141,7 +141,7 @@ class DeepLSTM(nn.Module):
                 matrix = self.named_modules["linear"+str(i+1)](h)
                 h = self.func_map(name, matrix)
             h = self.named_modules["linear"+str(self.hidden_num+1)](h)
-        h = F.log_softmax(h, dim=1)
+        h = F.log_softmax(h)
         return h
 
     def func_map(self, name, matrix):
