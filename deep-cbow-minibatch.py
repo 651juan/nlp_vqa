@@ -29,10 +29,8 @@ import sys
 torch.manual_seed(1)
 random.seed(1)
 
-
 CUDA = torch.cuda.is_available()
 print("CUDA: %s" % CUDA)
-
 
 # Functions to read in the corpus
 w2i = defaultdict(lambda: len(w2i))
@@ -43,8 +41,8 @@ PAD = w2i["<pad>"]
 # One data point
 Example = namedtuple("Example", ["words", "tag", "type", "img_feat"])
 
-def read_dataset(questions_path, annotations_path, image_features_path, img_features2id_path, imgid2imginfo_path):
 
+def read_dataset(questions_path, annotations_path, image_features_path, img_features2id_path, imgid2imginfo_path):
     with open(imgid2imginfo_path, 'r') as file:
         imgid2info = json.load(file)
 
@@ -76,11 +74,11 @@ def read_dataset(questions_path, annotations_path, image_features_path, img_feat
 
 
 # Read in the data
-train = list(read_dataset( "data/vqa_questions_train.gzip",
-                           "data/vqa_annotatons_train.gzip",
-                            parameters.image_features_path,
-                            parameters.img_features2id_path,
-                            parameters.imgid2imginfo_path))
+train = list(read_dataset("data/vqa_questions_train.gzip",
+                          "data/vqa_annotatons_train.gzip",
+                          parameters.image_features_path,
+                          parameters.img_features2id_path,
+                          parameters.imgid2imginfo_path))
 
 w2i = defaultdict(lambda: UNK, w2i)
 dev = list(read_dataset("data/vqa_questions_valid.gzip",
@@ -90,20 +88,22 @@ dev = list(read_dataset("data/vqa_questions_valid.gzip",
                         parameters.imgid2imginfo_path))
 
 test = list(read_dataset("data/vqa_questions_test.gzip",
-                        "data/vqa_annotatons_test.gzip",
-                        parameters.image_features_path,
-                        parameters.img_features2id_path,
-                        parameters.imgid2imginfo_path))
+                         "data/vqa_annotatons_test.gzip",
+                         parameters.image_features_path,
+                         parameters.img_features2id_path,
+                         parameters.imgid2imginfo_path))
 
 nwords = len(w2i)
 ntags = len(t2i)
+
 
 class DeepCBOW(nn.Module):
     """
     Deep CBOW model
     """
 
-    def __init__(self, vocab_size, embedding_dim, img_features_dim, output_dim, hidden_dims=[], activation_functions=[]):
+    def __init__(self, vocab_size, embedding_dim, img_features_dim, output_dim, hidden_dims=[],
+                 activation_functions=[]):
         """
         :param vocab_size: Vocabulary size of the training set.
         :param embedding_dim: The word embedding dimension.
@@ -121,7 +121,7 @@ class DeepCBOW(nn.Module):
             self.linear1 = nn.Linear(img_features_dim + embedding_dim, hidden_dims[0])
             for i in range(1, self.hidden_num):
                 name = "linear" + str(i + 1)
-                self.add_module(name, nn.Linear(hidden_dims[i-1], hidden_dims[i]))
+                self.add_module(name, nn.Linear(hidden_dims[i - 1], hidden_dims[i]))
             name = "linear" + str(self.hidden_num + 1)
             self.add_module(name, nn.Linear(hidden_dims[self.hidden_num - 1], output_dim))
         self.named_modules = dict(self.named_children())
@@ -131,14 +131,14 @@ class DeepCBOW(nn.Module):
         embeds = self.embeddings(words)
         h = torch.sum(embeds, 1)
         h = torch.cat([image, h], dim=1)
-        if(self.hidden_num == 0):
+        if (self.hidden_num == 0):
             h = self.linear1(h)
         else:
             for i in range(self.hidden_num):
                 name = self.F[i]
-                matrix = self.named_modules["linear"+str(i+1)](h)
+                matrix = self.named_modules["linear" + str(i + 1)](h)
                 h = self.func_map(name, matrix)
-            h = self.named_modules["linear"+str(self.hidden_num+1)](h)
+            h = self.named_modules["linear" + str(self.hidden_num + 1)](h)
         return h
 
     def func_map(self, name, matrix):
@@ -147,6 +147,7 @@ class DeepCBOW(nn.Module):
         else:
             # Default
             return F.relu(matrix)
+
 
 model = DeepCBOW(nwords,
                  parameters.embedding_dim,
@@ -160,9 +161,10 @@ if CUDA:
 
 print(model)
 
+
 def minibatch(data, batch_size=32):
     for i in range(0, len(data), batch_size):
-        yield data[i:i+batch_size]
+        yield data[i:i + batch_size]
 
 
 def evaluate(model, data):
@@ -187,27 +189,30 @@ def evaluate(model, data):
         correct = torch.eq(predictions, targets)
         for i in range(len(correct)):
             if types[i] == 'yes/no':
-                size_yesno+=1
+                size_yesno += 1
                 if correct.data[i] == 1:
                     correct_yesno += 1
             elif types[i] == 'number':
-                size_number+=1
+                size_number += 1
                 if correct.data[i] == 1:
                     correct_number += 1
             elif types[i] == 'other':
-                size_other+=1
+                size_other += 1
                 if correct.data[i]:
-                    correct_other+=1
+                    correct_other += 1
 
         correct_all += torch.eq(predictions, targets).sum().data[0]
 
-    return correct_all, len(data), correct_all/len(data), correct_yesno/size_yesno, correct_number/size_number, correct_other/size_other
+    return correct_all, len(data), correct_all / len(
+        data), correct_yesno / size_yesno, correct_number / size_number, correct_other / size_other
 
 
 def get_variable(x):
     """Get a Variable given indices x"""
     tensor = torch.cuda.LongTensor(x) if CUDA else torch.LongTensor(x)
     return Variable(tensor)
+
+
 def get_image(x):
     tensor = torch.cuda.FloatTensor(x) if CUDA else torch.FloatTensor(x)
     return Variable(tensor)
@@ -229,6 +234,9 @@ def preprocess(batch):
 
 optimizer = optim.Adam(model.parameters(), parameters.lr)
 
+terminator = 0
+prev_improvement = 0
+
 for ITER in range(parameters.epochs):
 
     random.shuffle(train)
@@ -237,7 +245,6 @@ for ITER in range(parameters.epochs):
     updates = 0
 
     for batch in minibatch(train, parameters.batch_size):
-
         updates += 1
 
         # pad data with zeros
@@ -258,27 +265,29 @@ for ITER in range(parameters.epochs):
         optimizer.step()
 
     print("iter %r: avg train loss=%.4f, time=%.2fs" %
-          (ITER, train_loss/updates, time.time()-start))
+          (ITER, train_loss / updates, time.time() - start))
 
     # evaluate
     _, _, train_all, train_yesno, train_number, train_other = evaluate(model, train)
     _, _, dev_all, dev_yesno, dev_number, dev_other = evaluate(model, dev)
-    print("iter %r: train all=%.4f yesno=%.4f number=%.4f other=%.4f" % (ITER, train_all, train_yesno, train_number, train_other))
-    print("iter %r: valid all=%.4f yesno=%.4f number=%.4f other=%.4f" % (ITER, dev_all, dev_yesno, dev_number, dev_other))
+    print("iter %r: train all=%.4f yesno=%.4f number=%.4f other=%.4f" % (
+    ITER, train_all, train_yesno, train_number, train_other))
+    print(
+        "iter %r: valid all=%.4f yesno=%.4f number=%.4f other=%.4f" % (ITER, dev_all, dev_yesno, dev_number, dev_other))
 
-    #check if the dev accuracy is getting decreased, or stable
-    #or to check the dev loss if gets increased
+    # check if the dev accuracy is getting decreased, or stable
+    # or to check the dev loss if gets increased
     if ITER == 0:
-        #init
-        prev_imrpovement = dev_all
-    elif prev_imrpovement >=  dev_all :
-        print("NO IMRPOVEMENT for ")
-        prev_imrpovement = dev_all
+        # init
+        prev_improvement = dev_all
+    elif prev_improvement >= dev_all:
+        prev_improvement = dev_all
         terminator += 1
+        print("No improvement for ", str(terminator), " epochs")
         if terminator == parameters.threshold_val:
-            print("Epochs Halt , didnt manage to reheal")
-    else :
-        prev_imrpovement = dev_all
+            print("Termination condition reached. Halting training!")
+    else:
+        prev_improvement = dev_all
         terminator = 0
 _, _, test_all, test_yesno, test_number, test_other = evaluate(model, test)
 print("test all=%.4f yesno=%.4f number=%.4f other=%.4f" % (test_all, test_yesno, test_number, test_other))
